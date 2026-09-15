@@ -1,0 +1,10 @@
+﻿{
+  "topic": "Distributed Consensus & Fault-Tolerant State Machines with Raft and Rust",
+  "audience": "Senior Backend and Distributed Systems Engineers",
+  "focus_areas": [
+    "Raft Leader Election and Split-Vote Mitigation",
+    "Log Replication and Linearizable Read Indexes",
+    "Dynamic Cluster Membership Changes and Joint Consensus",
+    "Asynchronous IO with Tokio and Memory-Mapped WAL Persistence"
+  ]
+}
