@@ -1,4 +1,4 @@
-﻿# ==============================================================================
+# ==============================================================================
 # Multi-Stage Production Dockerfile for Distributed Multi-Agent Course Engine
 # Security: Non-root user (UID 10001), slim runtime base, zero secret baking.
 # ==============================================================================
@@ -51,5 +51,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 EXPOSE 8080
 
-# Default entrypoint runs FastAPI A2A HTTP Server
-CMD ["python3", "-m", "uvicorn", "agents.orchestrator.a2a_server:app", "--host", "0.0.0.0", "--port", "8080"]
+# Default entrypoint runs FastAPI A2A HTTP Server.
+# Cloud Run injects $PORT and requires the container to listen on it.
+CMD ["sh", "-c", "exec python3 -m uvicorn agents.orchestrator.a2a_server:app --host 0.0.0.0 --port ${PORT:-8080}"]
