@@ -1,4 +1,4 @@
-﻿"""
+"""
 Grounded Researcher Agent.
 Leverages Vertex AI / Gemini 2.5 with Google Search Grounding to extract authoritative
 syllabus blueprints, code patterns, and verified source citations.
@@ -90,7 +90,7 @@ class ResearcherAgent:
         Executes grounded research using Gemini 2.5 with Google Search tool enabled.
         """
         logger.info("Conducting grounded syllabus research on: '%s' for audience: '%s'", topic, audience)
-        focus_str = f"\nPriority Focus Areas:\n" + "\n".join(f"- {f}" for f in focus_areas) if focus_areas else ""
+        focus_str = "\nPriority Focus Areas:\n" + "\n".join(f"- {f}" for f in focus_areas) if focus_areas else ""
 
         user_prompt = f"""
 Research and formulate an exhaustive technical course outline on the following topic:
@@ -137,13 +137,17 @@ Ensure the response is STRICT JSON only, without markdown wrapping.
             max_output_tokens=4096,
         )
 
-        response = self.client.models.generate_content(
+        response = await self.client.aio.models.generate_content(
             model=self.model_name,
             contents=user_prompt,
             config=config,
         )
 
-        raw_text = response.text or "{}"
+        raw_text = response.text or ""
+        if not raw_text.strip():
+            raise RuntimeError(
+                "Researcher model returned an empty response (possible safety block or token limit)."
+            )
         clean_json = raw_text.strip()
         if clean_json.startswith("```json"):
             clean_json = clean_json[7:]
@@ -153,53 +157,39 @@ Ensure the response is STRICT JSON only, without markdown wrapping.
             clean_json = clean_json[:-3]
         clean_json = clean_json.strip()
 
-        try:
-            parsed_dict = json.loads(clean_json)
-            # Inject web grounding metadata if returned by model
-            grounding_sources = []
-            if hasattr(response, "candidates") and response.candidates:
-                candidate = response.candidates[0]
-                grounding_meta = getattr(candidate, "grounding_metadata", None)
-                if grounding_meta and getattr(grounding_meta, "grounding_chunks", None):
-                    for chunk in grounding_meta.grounding_chunks:
-                        web = getattr(chunk, "web", None)
-                        if web and getattr(web, "uri", None):
-                            grounding_sources.append(
-                                SourceCitation(
-                                    title=getattr(web, "title", "Verified Web Grounding"),
-                                    url=web.uri,
-                                    relevance="Google Search grounding citation",
-                                )
-                            )
+        # A parse failure is surfaced to the caller rather than replaced with placeholder
+        # content: a fabricated syllabus with invented citations is worse than a 5xx.
+        parsed_dict = json.loads(clean_json)
 
-            if grounding_sources and not parsed_dict.get("sources"):
-                parsed_dict["sources"] = [s.model_dump() for s in grounding_sources]
+        if not parsed_dict.get("sources"):
+            parsed_dict["sources"] = [s.model_dump() for s in self._extract_grounding(response)]
 
-            report = ResearchReport.model_validate(parsed_dict)
-            logger.info("Research completed successfully: %d modules, %d sources.", len(report.core_modules), len(report.sources))
-            return report
+        report = ResearchReport.model_validate(parsed_dict)
+        logger.info(
+            "Research completed successfully: %d modules, %d sources.",
+            len(report.core_modules),
+            len(report.sources),
+        )
+        return report
 
-        except Exception as err:
-            logger.warning("Failed to parse structured JSON directly (%s). Building fallback report.", err)
-            return ResearchReport(
-                topic=topic,
-                executive_summary=clean_json[:500] if clean_json else "Research synthesis generated.",
-                prerequisites=["Command line proficiency", "Intermediate programming fundamentals"],
-                core_modules=[
-                    ModuleOutline(
-                        module_number=1,
-                        title=f"Architectural Foundations of {topic}",
-                        objectives=["Understand foundational principles", "Inspect core invariants"],
-                        key_concepts=["Primitives", "State Management", "Protocols"],
-                        hands_on_lab="Bootstrap initial development environment and verify baseline invariants.",
-                    )
-                ],
-                common_pitfalls=["Inadequate error recovery handling", "Unbounded resource usage"],
-                sources=[
+    @staticmethod
+    def _extract_grounding(response) -> List[SourceCitation]:
+        """Converts Google Search grounding metadata into source citations."""
+        citations: List[SourceCitation] = []
+        candidates = getattr(response, "candidates", None)
+        if not candidates:
+            return citations
+
+        grounding_meta = getattr(candidates[0], "grounding_metadata", None)
+        for chunk in getattr(grounding_meta, "grounding_chunks", None) or []:
+            web = getattr(chunk, "web", None)
+            uri = getattr(web, "uri", None)
+            if uri:
+                citations.append(
                     SourceCitation(
-                        title="Google Search Grounding Index",
-                        url="https://cloud.google.com/vertex-ai",
-                        relevance="Grounded Vertex AI search execution",
+                        title=getattr(web, "title", None) or "Verified Web Grounding",
+                        url=uri,
+                        relevance="Google Search grounding citation",
                     )
-                ],
-            )
+                )
+        return citations
