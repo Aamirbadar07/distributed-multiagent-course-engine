@@ -1,4 +1,4 @@
-﻿"""
+"""
 Orchestrator Agent.
 Implements:
 1. LoopAgent: Iterative critique and refinement loop between ContentBuilder and Judge.
@@ -6,7 +6,6 @@ Implements:
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import time
@@ -15,8 +14,9 @@ from pydantic import BaseModel, Field
 
 from agents.researcher.agent import ResearcherAgent, ResearchReport
 from agents.content_builder.agent import ContentBuilderAgent
+from agents.content_builder.format_validator import MarkdownFormatValidator
 from agents.judge.agent import JudgeAgent
-from agents.judge.schemas import EvaluationReport, GatingDecision
+from agents.judge.schemas import EvaluationReport
 
 logger = logging.getLogger("agent.orchestrator")
 
@@ -29,6 +29,7 @@ class IterationSnapshot(BaseModel):
     duration_seconds: float
     actionable_revisions: List[str]
     word_count: int
+    format_errors: List[str] = Field(default_factory=list)
 
 
 class PipelineTelemetry(BaseModel):
@@ -67,6 +68,7 @@ class LoopAgent:
         self.builder = builder
         self.judge = judge
         self.max_iterations = max_iterations
+        self.validator = MarkdownFormatValidator()
 
     async def execute(
         self,
@@ -94,7 +96,12 @@ class LoopAgent:
                 iteration=iteration,
             )
 
-            # Step 2: Audit Content via Judge Agent
+            # Step 2: Deterministic format gate
+            validation = self.validator.validate(current_content)
+            if not validation.is_valid:
+                logger.warning("Format validation failed: %s", validation.errors)
+
+            # Step 3: Audit Content via Judge Agent
             final_evaluation = await self.judge.evaluate(
                 topic=topic,
                 content=current_content,
@@ -110,6 +117,7 @@ class LoopAgent:
                 duration_seconds=round(iter_duration, 2),
                 actionable_revisions=final_evaluation.actionable_revisions,
                 word_count=len(current_content.split()),
+                format_errors=validation.errors,
             )
             snapshots.append(snapshot)
 
@@ -121,17 +129,20 @@ class LoopAgent:
                 final_evaluation.decision.value,
             )
 
-            # Gating check: if passed, terminate loop early
-            if final_evaluation.passed:
+            # Gating check: both gates must clear before content is considered converged
+            if final_evaluation.passed and validation.is_valid:
                 logger.info("Content passed quality gating on iteration %d! Exiting loop.", iteration)
                 break
-            else:
-                logger.warning(
-                    "Content failed quality gating (Score: %.1f < %.1f). Feeding revisions into next cycle.",
-                    final_evaluation.overall_score,
-                    self.judge.pass_threshold,
-                )
-                current_revisions = final_evaluation.actionable_revisions
+
+            logger.warning(
+                "Gating failed (Score: %.1f vs threshold %.1f, format errors: %d). "
+                "Feeding revisions into next cycle.",
+                final_evaluation.overall_score,
+                self.judge.pass_threshold,
+                len(validation.errors),
+            )
+            # Structural defects are non-negotiable, so they lead the revision list.
+            current_revisions = validation.errors + final_evaluation.actionable_revisions
 
         return current_content, final_evaluation, snapshots
 
@@ -151,8 +162,18 @@ class SequentialAgent:
     ):
         self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT")
         self.location = location or os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
-        max_iter = max_iterations or int(os.getenv("MAX_CRITIQUE_ITERATIONS", 3))
-        threshold = pass_threshold or float(os.getenv("PASSING_SCORE_THRESHOLD", 85.0))
+        max_iter = (
+            max_iterations
+            if max_iterations is not None
+            else int(os.getenv("MAX_CRITIQUE_ITERATIONS", 3))
+        )
+        if max_iter < 1:
+            raise ValueError(f"max_iterations must be at least 1, got {max_iter}")
+        threshold = (
+            pass_threshold
+            if pass_threshold is not None
+            else float(os.getenv("PASSING_SCORE_THRESHOLD", 85.0))
+        )
 
         # Instantiate specialized agents
         self.researcher = ResearcherAgent(project_id=self.project_id, location=self.location)
@@ -196,7 +217,7 @@ class SequentialAgent:
             research_duration_seconds=round(research_duration, 2),
             loop_duration_seconds=round(loop_duration, 2),
             iterations_executed=len(snapshots),
-            converged=final_eval.passed,
+            converged=final_eval.passed and not snapshots[-1].format_errors,
             final_score=final_eval.overall_score,
             snapshots=snapshots,
         )
