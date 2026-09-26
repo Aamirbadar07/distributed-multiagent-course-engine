@@ -1,2 +1,2 @@
-﻿"""Distributed Multi-Agent Course Creation Engine Package."""
+"""Distributed Multi-Agent Course Creation Engine Package."""
 __version__ = "1.0.0"

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # ==============================================================================
 # Cloud Run Production Deployment Script
 # Zero Hardcoded Secrets: Leverages Google Cloud IAM & Workload Identity.
@@ -67,13 +67,24 @@ gcloud run deploy "${SERVICE_NAME}" \
     --min-instances=0 \
     --max-instances=10 \
     --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${REGION},LOG_LEVEL=INFO" \
-    --allow-unauthenticated
+    --no-allow-unauthenticated
 
 SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" --platform=managed --region="${REGION}" --project="${PROJECT_ID}" --format="value(status.url)")
 
 echo "============================================================"
 echo " Deployment Successfully Completed!"
 echo " Service Endpoint: ${SERVICE_URL}"
-echo " Health Probe:     ${SERVICE_URL}/healthz"
-echo " API Docs (Swagger): ${SERVICE_URL}/docs"
+echo ""
+echo " The service requires authentication: every request bills Vertex AI"
+echo " tokens to this project, so it is not exposed publicly."
+echo ""
+echo " Grant a caller the invoker role:"
+echo "   gcloud run services add-iam-policy-binding ${SERVICE_NAME} \\"
+echo "     --region=${REGION} --project=${PROJECT_ID} \\"
+echo "     --member='user:CALLER@example.com' --role='roles/run.invoker'"
+echo ""
+echo " Then call it with an identity token:"
+echo "   curl -X POST ${SERVICE_URL}/v1/orchestrator/generate \\"
+echo "     -H \"Authorization: Bearer \$(gcloud auth print-identity-token)\" \\"
+echo "     -H 'Content-Type: application/json' -d @samples/sample_input.json"
 echo "============================================================"

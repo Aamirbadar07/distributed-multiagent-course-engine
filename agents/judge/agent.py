@@ -1,4 +1,4 @@
-﻿"""
+"""
 Judge Agent.
 Deterministic evaluation agent operating over Gemini 2.5 Pro with structured Pydantic v2 schemas.
 Acts as a strict pedagogical and technical quality gate before publishing.
@@ -11,7 +11,7 @@ import os
 from typing import Optional
 from google import genai
 from google.genai import types
-from .schemas import EvaluationCriterion, EvaluationReport, GatingDecision
+from .schemas import EvaluationReport, GatingDecision
 
 logger = logging.getLogger("agent.judge")
 
@@ -29,12 +29,17 @@ class JudgeAgent:
         project_id: Optional[str] = None,
         location: Optional[str] = None,
         model_name: Optional[str] = None,
-        pass_threshold: float = DEFAULT_THRESHOLD,
+        pass_threshold: Optional[float] = None,
     ):
         self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT")
         self.location = location or os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
         self.model_name = model_name or os.getenv("GEMINI_JUDGE_MODEL", "gemini-2.5-pro")
-        self.pass_threshold = float(os.getenv("PASSING_SCORE_THRESHOLD", pass_threshold))
+        # An explicit argument outranks the environment; the env var is only the default.
+        self.pass_threshold = (
+            float(pass_threshold)
+            if pass_threshold is not None
+            else float(os.getenv("PASSING_SCORE_THRESHOLD", self.DEFAULT_THRESHOLD))
+        )
 
         if self.project_id:
             self.client = genai.Client(
@@ -129,65 +134,29 @@ Emit your audit exclusively as a JSON object adhering to the schema:
             max_output_tokens=4096,
         )
 
-        try:
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-                config=config,
+        # No heuristic fallback: an API or schema failure must surface as a failure.
+        # Substituting an invented score would let un-evaluated content clear the gate.
+        response = await self.client.aio.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+            config=config,
+        )
+
+        raw_text = response.text or ""
+        if not raw_text.strip():
+            raise RuntimeError(
+                "Judge model returned an empty response (possible safety block or token limit)."
             )
 
-            raw_text = response.text or "{}"
-            report = EvaluationReport.model_validate_json(raw_text)
+        report = EvaluationReport.model_validate_json(raw_text)
 
-            # Enforce deterministic gating consistency
-            if report.overall_score >= self.pass_threshold:
-                report.decision = GatingDecision.PASS
-                report.passed = True
-            else:
-                report.decision = GatingDecision.FAIL
-                report.passed = False
+        # The threshold, not the model's self-reported verdict, decides the gate.
+        report.passed = report.overall_score >= self.pass_threshold
+        report.decision = GatingDecision.PASS if report.passed else GatingDecision.FAIL
 
-            logger.info(
-                "Judge evaluation complete: Score=%.1f/100, Decision=%s",
-                report.overall_score,
-                report.decision.value,
-            )
-            return report
-
-        except Exception as err:
-            logger.error("Structured evaluation failed (%s). Emitting fallback evaluation.", err)
-            # Fallback deterministic evaluation based on content heuristics
-            has_code = "```" in content
-            word_count = len(content.split())
-            heuristic_score = 80.0 if (has_code and word_count > 600) else 65.0
-            is_pass = heuristic_score >= self.pass_threshold
-
-            return EvaluationReport(
-                overall_score=heuristic_score,
-                decision=GatingDecision.PASS if is_pass else GatingDecision.FAIL,
-                passed=is_pass,
-                strengths=["Structured layout detected", "Code examples included" if has_code else "Broad conceptual overview"],
-                weaknesses=["Structured response fallback engaged; automated heuristic applied"],
-                actionable_revisions=[
-                    "Expand code block testability and include unit tests",
-                    "Add detailed failure-case analysis and network partition scenarios",
-                ],
-                criteria_breakdown=[
-                    EvaluationCriterion(
-                        criterion_id="technical_depth",
-                        name="Technical Depth",
-                        score=heuristic_score,
-                        weight=0.5,
-                        reasoning="Estimated via fallback parser due to transient JSON schema error.",
-                        suggestions=["Verify mathematical proofs and consensus invariants."],
-                    ),
-                    EvaluationCriterion(
-                        criterion_id="structural_formatting",
-                        name="Structural Formatting",
-                        score=85.0 if has_code else 70.0,
-                        weight=0.5,
-                        reasoning="Evaluated markdown elements and code blocks.",
-                        suggestions=["Ensure all fenced blocks define syntax tags."],
-                    ),
-                ],
-            )
+        logger.info(
+            "Judge evaluation complete: Score=%.1f/100, Decision=%s",
+            report.overall_score,
+            report.decision.value,
+        )
+        return report

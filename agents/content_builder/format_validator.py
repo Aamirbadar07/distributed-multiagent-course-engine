@@ -1,4 +1,4 @@
-﻿"""
+"""
 Format Validation Tool Script.
 Enforces GitHub-Flavored Markdown specifications, heading hierarchy,
 fenced code block language tags, and pedagogical elements (quizzes, alerts).

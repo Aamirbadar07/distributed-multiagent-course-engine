@@ -1,4 +1,4 @@
-﻿---
+---
 name: curriculum-deep-research
 description: Conducts Google Search-grounded academic and technical syllabus research to produce comprehensive, verified course outlines with technical prerequisites and citations.
 metadata:

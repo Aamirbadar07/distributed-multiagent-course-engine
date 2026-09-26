@@ -1,4 +1,4 @@
-﻿"""
+"""
 Content Builder Agent.
 Synthesizes comprehensive, pedagogical markdown courses utilizing researched outlines.
 Integrates internal format validation and iteratively addresses Judge feedback.
@@ -10,7 +10,6 @@ import os
 from typing import List, Optional
 from google import genai
 from google.genai import types
-from .format_validator import MarkdownFormatValidator, ValidationResult
 
 logger = logging.getLogger("agent.content_builder")
 
@@ -30,7 +29,6 @@ class ContentBuilderAgent:
         self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT")
         self.location = location or os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
         self.model_name = model_name or os.getenv("GEMINI_BUILDER_MODEL", "gemini-2.5-pro")
-        self.validator = MarkdownFormatValidator()
 
         if self.project_id:
             self.client = genai.Client(
@@ -115,7 +113,7 @@ Produce the full markdown document now. Do not wrap the whole document in an ext
             max_output_tokens=8192,
         )
 
-        response = self.client.models.generate_content(
+        response = await self.client.aio.models.generate_content(
             model=self.model_name,
             contents=prompt,
             config=config,
@@ -132,13 +130,5 @@ Produce the full markdown document now. Do not wrap the whole document in an ext
             clean_content = clean_content[:-3]
         clean_content = clean_content.strip()
 
-        # Run automated format validation tool
-        val_result: ValidationResult = self.validator.validate(clean_content)
-        if not val_result.is_valid:
-            logger.warning("Format validator detected errors: %s", val_result.errors)
-        else:
-            logger.info("Format validator passed (Words: %d, Code Blocks: %d)",
-                        val_result.metrics.get("word_count", 0),
-                        val_result.metrics.get("code_blocks", 0))
-
+        logger.info("Built %d words for iteration %d", len(clean_content.split()), iteration)
         return clean_content

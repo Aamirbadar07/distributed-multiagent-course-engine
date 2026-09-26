@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # ==============================================================================
 # Local Execution Script with Google Application Default Credentials (ADC)
 # ==============================================================================
