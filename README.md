@@ -1,4 +1,4 @@
-﻿# Distributed Multi-Agent Course Creation Engine
+# Distributed Multi-Agent Course Creation Engine
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![Vertex AI Gemini 2.5](https://img.shields.io/badge/Vertex%20AI-Gemini%202.5%20Pro%2FFlash-4285F4.svg?logo=google-cloud&logoColor=white)](https://cloud.google.com/vertex-ai)
@@ -32,7 +32,7 @@ The engine coordinates specialized agents across two distinct coordination topol
             │         ResearcherAgent           │
             │  - Gemini 2.5 Flash               │
             │  - Google Search Tool Grounding   │
-            │  - SKILL.md Standard              │
+            │  - Spec: researcher/SKILL.md      │
             └─────────────────┬─────────────────┘
                               │ Grounded Blueprint (Pydantic v2)
                               ▼
@@ -45,17 +45,17 @@ The engine coordinates specialized agents across two distinct coordination topol
       │    └────────┬─────────┘         │             │
       │             │ Markdown          │ Revisions   │
       │             ▼                   │ (Iter <= 3) │
-      │    ┌──────────────────┐         │             │
-      │    │ FormatValidator  │         │             │
+      │    ┌──────────────────┐         │ format      │
+      │    │ FormatValidator  │─────────┤ errors +    │
+      │    │  (deterministic) │         │ critique    │
       │    └────────┬─────────┘         │             │
-      │             │ Validated AST     │             │
       │             ▼                   │             │
       │    ┌──────────────────┐         │             │
       │    │    JudgeAgent    │─────────┘             │
       │    │  - Gemini 2.5 Pro│ (Score < 85 / FAIL)   │
       │    └────────┬─────────┘                       │
       └─────────────┼─────────────────────────────────┘
-                    │ PASS (Score >= 85)
+                    │ PASS (Score >= 85 AND zero format errors)
                     ▼
             ┌───────────────────────────────────┐
             │   Packaging & Telemetry Engine    │
@@ -85,17 +85,18 @@ sequenceDiagram
 
     rect rgb(240, 248, 255)
         Note over Orch,Jdg: LoopAgent Evaluator-Optimizer Cycle (Max 3 Iterations)
-        loop Until Judge PASS (Score >= 85) or Max Iterations Reached
+        loop Until (Judge PASS and format valid) or Max Iterations Reached
             Orch->>Bld: build(research_context, critique_revisions)
             activate Bld
-            Bld->>Fmt: validate(markdown_ast)
-            Fmt-->>Bld: ValidationResult(valid=True, metrics)
-            Bld-->>Orch: Clean Curriculum Markdown
+            Bld-->>Orch: Curriculum Markdown
             deactivate Bld
+            Orch->>Fmt: validate(markdown)
+            Fmt-->>Orch: ValidationResult(is_valid, errors, metrics)
             Orch->>Jdg: evaluate(content, research_context)
             activate Jdg
             Jdg-->>Orch: EvaluationReport(overall_score, passed, revisions)
             deactivate Jdg
+            Note over Orch: Format errors lead the revision list for the next cycle
         end
     end
 
@@ -115,6 +116,12 @@ Multi-agent swarms introduce exponential cost and latency overhead if models are
 | **ContentBuilder** | `gemini-2.5-pro` | Format Validator | 8.4s / 14.1s | ~3,500 | ~5,000 | **$8.25** | Pro handles extensive context windows and maintains strict code correctness and pedagogical scaffolding. |
 | **Judge** | `gemini-2.5-pro` | Pydantic v2 Schema | 3.1s / 5.6s | ~5,800 | ~800 | **$3.60** | Pro exhibits zero-shot adherence to strict deterministic evaluation rubrics and JSON schemas. |
 | **Total Pipeline** | *Hybrid Swarm* | Google Search + AST | **13.3s / 22.9s** | ~10,500 | ~7,300 | **$12.23 / 1k** | **42% lower cost & 38% lower latency** compared to a naive uniform Gemini Pro deployment. |
+
+> [!NOTE]
+> These figures are **planning estimates** derived from Vertex AI list pricing and typical
+> token volumes for this prompt shape — not measured benchmarks. The engine records real
+> per-iteration latency and score data in `PipelineTelemetry` on every run; use that
+> output to replace these numbers with measurements from your own project and region.
 
 ---
 
@@ -150,6 +157,9 @@ distributed-multiagent-course-engine/
 ├── scripts/
 │   ├── deploy.sh                  # Automated zero-credential Cloud Run deployer
 │   └── run_local.sh               # Local runner with Application Default Credentials
+├── tests/
+│   ├── test_engine.py             # Validator, gating schema, and LoopAgent tests
+│   └── test_server.py             # A2A HTTP surface smoke tests
 └── samples/
     ├── sample_input.json          # Example test payload
     └── generated_course_sample.md # Sample generated artifact
@@ -178,10 +188,18 @@ distributed-multiagent-course-engine/
 2. **Configure Environment**:
    ```bash
    cp .env.example .env
-   # Set your Google Cloud Project ID
-   export GOOGLE_CLOUD_PROJECT="your-project-id"
-   export GOOGLE_CLOUD_LOCATION="us-central1"
+   # Edit .env and set GOOGLE_CLOUD_PROJECT to your project id.
+   # The server loads .env at startup; exported shell variables also work and win.
    ```
+
+   | Variable | Default | Purpose |
+   | :--- | :--- | :--- |
+   | `GOOGLE_CLOUD_PROJECT` | *(unset)* | Enables the Vertex AI backend. Without it the SDK falls back to API-key mode. |
+   | `GOOGLE_CLOUD_LOCATION` | `us-central1` | Vertex AI region. |
+   | `MAX_CRITIQUE_ITERATIONS` | `3` | Loop budget. Must be >= 1. |
+   | `PASSING_SCORE_THRESHOLD` | `85.0` | Judge gate. An explicit constructor argument overrides this. |
+   | `CORS_ALLOW_ORIGINS` | *(unset)* | Comma-separated browser origin allowlist. CORS is disabled when unset. |
+   | `LOG_LEVEL` | `INFO` | Root log level. |
 
 3. **Run Locally via A2A Server**:
    ```bash
@@ -197,6 +215,15 @@ distributed-multiagent-course-engine/
      -d @samples/sample_input.json
    ```
 
+### Running the Tests
+
+The suite stubs every model call, so it needs no credentials and no network access:
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
 ---
 
 ## ☁️ Google Cloud Run Deployment
@@ -207,6 +234,30 @@ The service is engineered for zero-trust environments with **zero hardcoded cred
 chmod +x scripts/deploy.sh
 ./scripts/deploy.sh
 ```
+
+### Invoking the Deployed Service
+
+The service deploys with `--no-allow-unauthenticated`. Every request spends Vertex AI
+tokens billed to your project, so callers must hold `roles/run.invoker`:
+
+```bash
+# Grant a caller access
+gcloud run services add-iam-policy-binding course-engine-swarm \
+  --region=us-central1 \
+  --member="user:caller@example.com" \
+  --role="roles/run.invoker"
+
+# Call it with an identity token
+curl -X POST "${SERVICE_URL}/v1/orchestrator/generate" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -H "Content-Type: application/json" \
+  -d @samples/sample_input.json
+```
+
+> [!WARNING]
+> Do not redeploy with `--allow-unauthenticated`. The generate endpoint interpolates
+> caller-supplied text into grounded model prompts, so an open endpoint is both a
+> prompt-injection surface and an uncapped billing liability.
 
 ---
 
