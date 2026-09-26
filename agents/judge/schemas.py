@@ -1,4 +1,4 @@
-﻿"""
+"""
 Pydantic v2 schemas for deterministic curriculum evaluation and quality gating.
 Enforces rigorous pedagogical, technical, and structural criteria.
 """

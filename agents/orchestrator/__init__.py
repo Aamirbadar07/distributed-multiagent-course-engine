@@ -1,4 +1,4 @@
-﻿"""Orchestrator Agent package combining Sequential and Loop agent patterns."""
+"""Orchestrator Agent package combining Sequential and Loop agent patterns."""
 from .orchestrator import (
     SequentialAgent,
     LoopAgent,

@@ -1,4 +1,4 @@
-﻿# Distributed Consensus & Fault-Tolerant State Machines with Raft and Rust
+# Distributed Consensus & Fault-Tolerant State Machines with Raft and Rust
 
 > [!IMPORTANT]
 > **Prerequisites**: Familiarity with systems programming in Rust (ownership, lifetimes, async/await with Tokio), TCP/IP socket abstractions, and state machine replication basics.
