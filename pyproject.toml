@@ -25,6 +25,11 @@ dependencies = [
     "python-dotenv>=1.0.1",
 ]
 
+[tool.setuptools.packages.find]
+# Without this, flat-layout auto-discovery fails on the samples/ and tests/
+# directories and `pip install -e .` errors out.
+include = ["agents*"]
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
